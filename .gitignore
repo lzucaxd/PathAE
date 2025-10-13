@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Jupyter
+.ipynb_checkpoints
+*.ipynb
+
+# Models & outputs
+*.pth
+*.pt
+*.h5
+*.npy
+reconstruction_scores.csv
+evaluation_summary.csv
+froc_curve.png
+*.log
+
+# Data directories (large files)
+PCam/
+cam16_prepped/
+final_dataset/
+test_set_heatmaps/
+heatmaps/
+eval_dataset/
+
+# OS
+.DS_Store
+Thumbs.db
+nohup.out
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
