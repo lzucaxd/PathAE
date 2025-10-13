@@ -16,11 +16,18 @@ build/
 *.pth
 *.pt
 *.h5
-*.npy
 reconstruction_scores.csv
 evaluation_summary.csv
 froc_curve.png
 *.log
+reconstructions/
+demo_heatmap/
+heatmaps_v2/
+
+# Keep preprocessing outputs
+!reference_tile.npy
+!normalization_stats.npy
+!threshold.npy
 
 # Data directories (large files)
 PCam/

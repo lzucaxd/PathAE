@@ -17,9 +17,62 @@ from torch.utils.data import DataLoader
 import numpy as np
 from pathlib import Path
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 
 from dataset import TissueDataset
 from model_vae import BetaVAE, vae_loss, KLWarmup
+
+
+def save_reconstructions(model, dataset, epoch, output_dir, mean, std, device, n_samples=8):
+    """Save reconstruction visualizations."""
+    model.eval()
+    
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    fig, axes = plt.subplots(2, n_samples, figsize=(n_samples*2, 4))
+    
+    with torch.no_grad():
+        for i in range(n_samples):
+            # Get sample
+            img, _ = dataset[i]
+            img_batch = img.unsqueeze(0).to(device)
+            
+            # Reconstruct
+            mu, _ = model.encode(img_batch)
+            recon = model.decode(mu)
+            
+            # Denormalize for visualization
+            img_vis = img.cpu().numpy().transpose(1, 2, 0)
+            recon_vis = recon[0].cpu().numpy().transpose(1, 2, 0)
+            
+            # Denormalize: x_orig = x_norm * std + mean
+            img_vis = img_vis * std + mean
+            recon_vis = recon_vis * std + mean
+            
+            # Clip to [0, 1]
+            img_vis = np.clip(img_vis, 0, 1)
+            recon_vis = np.clip(recon_vis, 0, 1)
+            
+            # Plot
+            axes[0, i].imshow(img_vis)
+            axes[0, i].axis('off')
+            if i == 0:
+                axes[0, i].set_ylabel('Original', fontsize=10, fontweight='bold')
+            
+            axes[1, i].imshow(recon_vis)
+            axes[1, i].axis('off')
+            if i == 0:
+                axes[1, i].set_ylabel('Reconstructed', fontsize=10, fontweight='bold')
+    
+    plt.suptitle(f'Reconstructions - Epoch {epoch}', fontsize=12, fontweight='bold')
+    plt.tight_layout()
+    
+    output_path = output_dir / f'recon_epoch_{epoch:03d}.png'
+    plt.savefig(output_path, dpi=100, bbox_inches='tight')
+    plt.close()
+    
+    model.train()
 
 
 def train_epoch(model, loader, optimizer, kl_scheduler, lambda_l1, lambda_ssim, device):
@@ -95,6 +148,10 @@ def main():
     
     # Output
     parser.add_argument('--output', type=str, default='vae_best.pth')
+    parser.add_argument('--recon-dir', type=str, default='reconstructions',
+                        help='Directory to save reconstruction visualizations')
+    parser.add_argument('--save-every', type=int, default=1,
+                        help='Save reconstructions every N epochs')
     
     args = parser.parse_args()
     
@@ -184,6 +241,18 @@ def main():
     
     best_loss = float('inf')
     
+    # Create validation dataset for reconstruction monitoring (no augmentation)
+    val_dataset = TissueDataset(
+        csv_path=args.data_csv,
+        split='train',
+        stain_norm=args.stain_norm,
+        reference_tile=args.reference_tile,
+        normalize=True,
+        mean=mean,
+        std=std,
+        augment=False,  # No augmentation for visualization
+    )
+    
     for epoch in range(args.epochs):
         # Train
         metrics = train_epoch(
@@ -222,6 +291,14 @@ def main():
             print(" ← Best!")
         else:
             print()
+        
+        # Save reconstructions
+        if (epoch + 1) % args.save_every == 0:
+            save_reconstructions(
+                model, val_dataset, epoch+1, args.recon_dir,
+                np.array(mean), np.array(std), device
+            )
+            print(f"  ✓ Saved reconstructions to {args.recon_dir}/recon_epoch_{epoch+1:03d}.png")
         
         # Step KL warmup
         kl_warmup.step()

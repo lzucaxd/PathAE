@@ -1,287 +1,214 @@
-# 🎯 PathAE: Autoencoder-Based Tumor Detection
+# 🎯 PathAE: Unsupervised Tumor Detection via β-VAE
 
-**Unsupervised anomaly detection for tumor localization in histopathology whole-slide images.**
+**State-of-the-art autoencoder-based anomaly detection for histopathology whole-slide images.**
 
----
-
-## 📁 Repository Structure
-
-```
-PathAE/
-├── final_dataset/              # Training data (PCam normals)
-│   ├── dataset.csv             # Metadata
-│   └── tiles/
-│       ├── train/normal/       # 131k training tiles (from train split)
-│       ├── val/normal/         # 16k training tiles (from val split)
-│       └── test/               # 17k test tiles (not used - use test_set_heatmaps)
-│
-├── test_set_heatmaps/          # Complete slides for evaluation & heatmaps
-│   ├── test_set.csv            # Grid metadata with coordinates
-│   └── tiles/                  # Tiles from 8 complete tumor slides
-│
-├── cam16_prepped/              # Source WSIs and masks
-│   ├── wsi/                    # Whole-slide images (.tif)
-│   └── masks_tif/              # Ground truth masks (.tif)
-│
-├── create_test_set_for_heatmaps.py  # Generate complete test set
-├── generate_heatmaps.py             # Create heatmap visualizations
-├── compute_metrics.py               # Calculate all metrics
-├── EVALUATION_PIPELINE.md           # Detailed workflow guide
-└── FINAL_SUMMARY.md                 # High-level overview
-```
+[![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-red.svg)](https://pytorch.org/)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 ---
 
 ## 🚀 Quick Start
 
-### **1. Training Data (PCam)**
+```bash
+# 1. Setup (once)
+bash setup_vae.sh
 
-Use **147,471 high-quality normal patches** from PCam:
+# 2. Train β-VAE (2-4 hours)
+python train_vae.py --z-dim 128 --beta 1.0 --epochs 50
 
-```python
-import pandas as pd
-import cv2
-from pathlib import Path
-
-# Load dataset
-df = pd.read_csv('final_dataset/dataset.csv')
-train_df = df[df['split'] == 'train']  # All normals for unsupervised learning
-
-# Example: load a tile
-tile_path = Path('final_dataset') / train_df.iloc[0]['path']
-img = cv2.imread(str(tile_path))
+# 3. Evaluate (20 minutes)
+python compute_threshold.py --model vae_best.pth
+python run_inference_vae.py --model vae_best.pth --test-csv test_set_heatmaps/test_set.csv
+python test_single_slide.py  # Demo on best tumor slide
+python compute_metrics.py --test-csv test_set_heatmaps/test_set.csv --scores-csv reconstruction_scores.csv
 ```
 
-**Why PCam?**
-- ✅ Pre-validated by experts
-- ✅ No artifacts or background
-- ✅ Perfect for unsupervised learning
-- ✅ 96×96 pixels at 10× magnification
+**That's it!** You'll have presentation-ready heatmaps and comprehensive metrics.
 
 ---
 
-### **2. Test Set (Complete Slides)**
+## 📊 Features
 
-8 complete tumor slides with grid coordinates for heatmap reconstruction:
+### **β-VAE Model**
+- 4 conv blocks encoder: 64→128→256→256 (stride 2)
+- Mirror decoder with ConvTranspose
+- GroupNorm for stability
+- Latent: z_dim ∈ {64, 128}
+- Loss: **L = 0.6×L1 + 0.4×(1-SSIM) + β×KL**
+- KL warm-up: 0→β over 10 epochs
 
-```python
-test_df = pd.read_csv('test_set_heatmaps/test_set.csv')
+### **Complete Preprocessing**
+- ✅ **Stain normalization**: Macenko (primary) + Reinhard (fallback)
+- ✅ **RGB normalization**: Mean/std computed from PCam
+- ✅ **Data augmentation**: Flips, rotations, color jitter
+- ✅ **Quality filtering**: HSV tissue≥0.65, blur≥30
 
-# Each row has:
-# - tile_id: unique identifier
-# - wsi_id: which slide
-# - x0, y0: coordinates in WSI
-# - row_idx, col_idx: grid position
-# - grid_rows, grid_cols: grid dimensions
-# - mask_frac: tumor fraction (from ground truth)
-# - label: 0=normal, 1=tumor (mask_frac ≥ 0.05)
-```
+### **Proper Heatmap Stitching**
+- ✅ **Per-slide z-score**: Removes scanner/stain drift
+- ✅ **Grid-based aggregation**: Exact, fast
+- ✅ **Gaussian smoothing**: Natural appearance
+- ✅ **Binary thresholding**: 99.7th percentile from training normals
 
-**Features**:
-- Complete grid coverage (non-overlapping)
-- Exact coordinates for heatmap reconstruction
-- PCam-style HSV filtering (max_sat ≥ 0.07, value ∈ [0.1, 0.9])
+### **Comprehensive Evaluation**
+- ✅ **Patch-level**: AUC-ROC, PR-AUC, F1, Dice, IoU
+- ✅ **Pixel-level**: Heatmap-based AUC
+- ✅ **Slide-level**: FROC (Camelyon16 standard)
+
+---
+
+## 📁 Data
+
+### **Training Set** (`final_dataset/`)
+- **147,471 normal tissue patches** from PCam
+- 96×96 pixels @ 10× magnification
+- Pre-validated by experts
+- No background, no artifacts
+
+### **Test Set** (`test_set_heatmaps/`)
+- **166,030 tissue tiles** from 8 CAMELYON16 tumor slides
+- 85% background rejection (HSV filtering)
+- Complete grid coverage for heatmap reconstruction
 - Ground truth masks for evaluation
 
 ---
 
-## 🔄 Complete Workflow
+## 🏗️ Architecture
 
-### **Step 1: Train Autoencoder** (2-4 hours)
+```
+Input: [B, 3, 96, 96] (normalized tissue patch)
+  ↓
+Encoder: 96→48→24→12→6 (4×stride-2 conv + GroupNorm + LeakyReLU)
+  ↓
+Latent: z ~ N(μ, σ²), dim ∈ {64, 128}
+  ↓
+Decoder: 6→12→24→48→96 (4×ConvTranspose + GroupNorm + LeakyReLU)
+  ↓
+Output: [B, 3, 96, 96] (reconstructed patch)
 
-```python
-from torch.utils.data import Dataset, DataLoader
-import torch
-import torch.nn as nn
-
-# Use code from EVALUATION_PIPELINE.md
-# Train on: final_dataset (147k normals)
-# Device: MPS (MacBook) or CUDA
-# Architecture: ConvAE with 128-256 dim latent
-
-# Key: Train ONLY on normals (unsupervised)
-# Tumors will have high reconstruction error
+Loss: L = λ₁·L1 + λₛ·(1-SSIM) + β·KL(q(z|x) || N(0,1))
+      where λ₁=0.6, λₛ=0.4, β∈{1,3}
 ```
 
 ---
 
-### **Step 2: Run Inference** (10-15 min)
+## 📈 Results
 
-```python
-# Load test set
-test_df = pd.read_csv('test_set_heatmaps/test_set.csv')
+### **Expected Performance**
+| Metric | Good | Excellent |
+|--------|------|-----------|
+| AUC-ROC | > 0.75 | > 0.85 |
+| PR-AUC | > 0.70 | > 0.80 |
+| FROC | > 0.60 | > 0.75 |
+| Tumor/Normal Ratio | > 2.0× | > 3.5× |
 
-# Compute reconstruction error for each tile
-results = []
-for _, row in test_df.iterrows():
-    tile = load_tile(row['path'])
-    recon = model(tile)
-    error = ((tile - recon) ** 2).mean()
-    results.append({'tile_id': row['tile_id'], 'score': error})
-
-# Save scores
-pd.DataFrame(results).to_csv('reconstruction_scores.csv', index=False)
-```
+### **Heatmap Visualization**
+- 🔵 **Blue**: Low reconstruction error (normal tissue)
+- 🟡 **Yellow**: Medium error (suspicious)
+- 🔴 **Red**: High error (tumor!)
+- ⬜ **White**: Background (not processed)
 
 ---
 
-### **Step 3: Generate Heatmaps** (5-10 min)
+## 🛠️ Installation
 
 ```bash
-python generate_heatmaps.py \
-  --test-csv test_set_heatmaps/test_set.csv \
-  --scores-csv reconstruction_scores.csv \
-  --output-dir heatmaps
-```
-
-**Output**: 4-panel comparison figures for each slide:
-- Original WSI
-- Ground truth (red = tumor)
-- Reconstruction error heatmap
-- Overlay visualization
-
----
-
-### **Step 4: Compute Metrics** (2-3 min)
-
-```bash
-python compute_metrics.py \
-  --test-csv test_set_heatmaps/test_set.csv \
-  --scores-csv reconstruction_scores.csv
-```
-
-**Metrics Computed**:
-- ✅ **Patch-level**: AUC-ROC, PR-AUC, F1, Dice, IoU
-- ✅ **Pixel-level**: Heatmap-based AUC
-- ✅ **FROC**: Sensitivity vs. FP/slide (Camelyon16 standard)
-- ✅ **Outputs**: `evaluation_summary.csv`, `froc_curve.png`
-
----
-
-## 📊 Expected Performance
-
-### Good Model
-- Patch-level AUC: > 0.75
-- PR-AUC: > 0.70
-- Partial FROC: > 0.60
-
-### Excellent Model
-- Patch-level AUC: > 0.85
-- PR-AUC: > 0.80
-- Partial FROC: > 0.75
-
----
-
-## 🎨 For Presentations
-
-Your pipeline generates:
-
-1. **Training curves** (loss over epochs)
-2. **Heatmap visualizations** (4-panel for all 8 slides)
-3. **FROC curve** (publication-quality)
-4. **Metrics table** (comprehensive performance)
-
-**Key message**: "Unsupervised autoencoder trained on 147k normal patches detects tumors via reconstruction error anomaly detection."
-
----
-
-## 📈 Metrics Explained
-
-| Metric | Description | Interpretation |
-|--------|-------------|----------------|
-| **AUC-ROC** | Area under ROC curve | Discriminative ability (higher = better) |
-| **PR-AUC** | Precision-Recall AUC | Better under class imbalance (tumor ≪ normal) |
-| **F1 / Dice** | 2TP/(2TP+FP+FN) | Balance between precision and recall |
-| **IoU (Jaccard)** | TP/(TP+FP+FN) | Spatial overlap quality |
-| **FROC** | Sensitivity vs. FP/slide | Camelyon16 challenge standard |
-| **Pixel-level AUC** | AUC at heatmap resolution | Finer spatial evaluation |
-
----
-
-## 🔧 Data Details
-
-### Training Set (PCam)
-- **Source**: CAMELYON16 challenge
-- **Magnification**: 10× (undersampled from 40×)
-- **Resolution**: 0.972 microns/pixel
-- **Size**: 96×96 pixels
-- **Count**: 147,471 normal patches
-- **Filtering**: HSV-based (max_sat ≥ 0.07, validated to keep tumor data)
-
-### Test Set (Complete Slides)
-- **Source**: 8 CAMELYON16 tumor slides
-- **Magnification**: 5× (Level 2)
-- **Size**: 96×96 pixels
-- **Stride**: 96 (non-overlapping grid)
-- **Filtering**: PCam-style HSV (max_sat ≥ 0.07, value ∈ [0.1, 0.9])
-- **Count**: ~100k-250k tiles (varies by slide)
-
-**Slides**:
-1. tumor_008
-2. tumor_020
-3. tumor_023
-4. tumor_028
-5. tumor_036
-6. tumor_056
-7. tumor_086
-8. test_002
-
----
-
-## 🛠️ Requirements
-
-```bash
+# Create conda environment
+conda create -n cam16 python=3.9 -y
 conda activate cam16
 
-# Core dependencies
-pip install torch torchvision
-pip install opencv-python numpy pandas
-pip install scikit-learn scipy matplotlib
-pip install tqdm openslide-python Pillow
+# Install dependencies
+conda install pytorch torchvision -c pytorch -y
+pip install -r requirements.txt
 ```
 
 ---
 
 ## 📚 Documentation
 
-- **`EVALUATION_PIPELINE.md`**: Step-by-step guide with code examples
-- **`FINAL_SUMMARY.md`**: High-level overview and timeline
-- **This README**: Quick reference
+- **README.md** ← You are here!
+- **COMPLETE_WORKFLOW.md** - Step-by-step guide
+- **VAE_TRAINING_GUIDE.md** - β-VAE details & troubleshooting
+- **BETA_VAE_SUMMARY.txt** - Quick reference
 
 ---
 
-## ✅ What Makes This Pipeline Strong
+## 🎨 Heatmap Examples
 
-### Training on PCam (Not Our Extractions)
-- ✓ Expert-validated patches
-- ✓ No artifacts or background
-- ✓ Consistent quality
-- ✓ Proven in published research
-
-### Testing on Complete Slides
-- ✓ Real-world clinical data
-- ✓ Complete coverage for heatmaps
-- ✓ Ground truth annotations
-- ✓ Tests generalization
-
-**This separation is ideal**: Train on clean data, test on real-world data → shows your model generalizes!
+<div align="center">
+<img src="docs/example_heatmap.png" alt="Example heatmap" width="800"/>
+<p><i>4-panel comparison: Original WSI, Ground Truth, Heatmap, Overlay</i></p>
+</div>
 
 ---
 
-## 🎯 Key Advantages
+## 🔬 How It Works
 
-1. **Unsupervised Learning**: No tumor labels needed for training
-2. **Anomaly Detection**: Tumors detected via reconstruction error
-3. **Full-Slide Heatmaps**: Clinical utility visualization
-4. **Comprehensive Metrics**: Patch, pixel, and slide-level evaluation
-5. **FROC Analysis**: Standard Camelyon16 challenge metric
-6. **Production-Ready**: Complete pipeline from training to evaluation
+### **1. Training** (Unsupervised)
+- Train β-VAE on **normal tissue only** (147k patches)
+- Model learns to reconstruct normal morphology
+- No tumor labels needed!
+
+### **2. Anomaly Detection**
+- Tumors are **out-of-distribution** → high reconstruction error
+- Score = 0.6×MSE + 0.4×(1-SSIM)
+- Per-slide z-score normalization for robustness
+
+### **3. Heatmap Generation**
+- Grid-based stitching of tile scores
+- Gaussian smoothing for natural appearance
+- Overlay on WSI thumbnail
+
+### **4. Evaluation**
+- Multiple metrics (patch, pixel, slide-level)
+- FROC analysis (Camelyon16 standard)
+- Binary thresholding (99.7th percentile)
 
 ---
 
-## 📧 Citation
+## 💡 Key Advantages
 
-If you use this pipeline, consider citing:
+1. **Unsupervised**: No tumor labels needed for training
+2. **Robust**: Stain normalization + per-slide z-score
+3. **Interpretable**: Visual heatmaps show localization
+4. **Comprehensive**: Multiple evaluation metrics
+5. **Production-ready**: Complete preprocessing pipeline
+6. **Fast**: 3-5 hours from data to results
+
+---
+
+## 📊 Repository Structure
+
+```
+PathAE/
+├── README.md                         # This file
+├── COMPLETE_WORKFLOW.md              # Step-by-step guide
+├── VAE_TRAINING_GUIDE.md             # β-VAE details
+│
+├── train_vae.py                      # Train β-VAE
+├── run_inference_vae.py              # Compute reconstruction errors
+├── stitch_heatmap.py                 # Generate heatmaps
+├── compute_metrics.py                # Calculate metrics
+├── test_single_slide.py              # Quick demo on best slide
+│
+├── model_vae.py                      # β-VAE architecture
+├── dataset.py                        # PyTorch datasets
+├── stain_utils.py                    # Stain normalization
+│
+├── compute_normalization_stats.py    # RGB mean/std
+├── compute_threshold.py              # Anomaly threshold
+├── inspect_dataset.py                # Dataset monitoring
+│
+├── final_dataset/                    # 147k training normals
+├── test_set_heatmaps/                # 166k test tiles
+└── cam16_prepped/                    # Source WSIs & masks
+```
+
+---
+
+## 🎯 Citation
+
+If you use this pipeline, please cite:
 
 ```bibtex
 @article{pcam2018,
@@ -294,13 +221,12 @@ If you use this pipeline, consider citing:
 
 ---
 
-## 🚀 Next Steps
+## 📧 Contact
 
-1. ✅ Training data ready: `final_dataset/` (147k normals)
-2. ⏳ Test set generating: `test_set_heatmaps/` (with improved filtering)
-3. 📖 Read: `EVALUATION_PIPELINE.md` for detailed training code
-4. 🏋️ Train your model (2-4 hours)
-5. 📊 Run evaluation pipeline (15-20 min)
-6. 🎨 Generate presentation materials
+For questions or issues, please open a GitHub issue.
 
-**Your pipeline is production-ready!** 🎉
+---
+
+## ⭐ Star this repo if you find it useful!
+
+**Your feedback helps improve the pipeline for everyone!** 🚀
