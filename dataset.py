@@ -95,7 +95,7 @@ class TissueDataset(Dataset):
                 A.VerticalFlip(p=0.5),
                 A.RandomRotate90(p=0.5),
                 
-                # Color (light)
+                # Color (light, on uint8 [0,255])
                 A.RandomBrightnessContrast(
                     brightness_limit=0.1,  # ±10%
                     contrast_limit=0.1,
@@ -103,16 +103,13 @@ class TissueDataset(Dataset):
                 ),
                 A.HueSaturationValue(
                     hue_shift_limit=2,      # ±2°
-                    sat_shift_limit=5,      # ±5%
+                    sat_shift_limit=5,      # ±5% (in uint8: ±12.75)
                     val_shift_limit=0,
-                    p=0.5
+                    p=0.3
                 ),
-                
-                # To tensor
-                ToTensorV2(),
             ])
         else:
-            self.transform = A.Compose([ToTensorV2()])
+            self.transform = None
         
         print(f"Dataset initialized:")
         print(f"  Split: {split}")
@@ -182,12 +179,21 @@ class TissueDataset(Dataset):
         if self.stain_norm:
             img_rgb = self.stain_normalizer.normalize(img_rgb)
         
-        # Scale to [0, 1]
-        img_float = img_rgb.astype(np.float32) / 255.0
+        # Ensure we have exactly 3 channels (RGB)
+        if img_rgb.shape[2] != 3:
+            img_rgb = img_rgb[:, :, :3]
         
-        # Augmentation
-        augmented = self.transform(image=img_float)
-        img_tensor = augmented['image']
+        # Augmentation (on uint8 image, before normalization)
+        if self.augment and self.transform is not None:
+            # Albumentations expects uint8 [0,255] for color transforms
+            augmented = self.transform(image=img_rgb)
+            img_augmented = augmented['image']
+        else:
+            img_augmented = img_rgb
+        
+        # Scale to [0, 1] and convert to tensor
+        img_float = img_augmented.astype(np.float32) / 255.0
+        img_tensor = torch.from_numpy(img_float).permute(2, 0, 1)
         
         # RGB normalization (mean/std)
         if self.normalize:

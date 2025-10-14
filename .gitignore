@@ -21,6 +21,7 @@ evaluation_summary.csv
 froc_curve.png
 *.log
 reconstructions/
+checkpoints/
 demo_heatmap/
 heatmaps_v2/
 
@@ -36,6 +37,13 @@ final_dataset/
 test_set_heatmaps/
 heatmaps/
 eval_dataset/
+
+# Experiments (ignore all training artifacts, only commit code/config)
+experiments/*/reconstructions/
+experiments/*/checkpoints/
+experiments/*/training.log
+experiments/*/model_best.pth
+experiments/*/*.png
 
 # OS
 .DS_Store

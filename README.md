@@ -1,232 +1,286 @@
-# 🎯 PathAE: Unsupervised Tumor Detection via β-VAE
+# PathAE: Unsupervised Tumor Detection with β-VAE
 
-**State-of-the-art autoencoder-based anomaly detection for histopathology whole-slide images.**
+**Autoencoder-based anomaly detection for histopathology whole slide images (CAMELYON16)**
 
-[![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
-[![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-red.svg)](https://pytorch.org/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+Train on normal tissue (PCam), detect tumors via reconstruction error.
 
 ---
 
-## 🚀 Quick Start
+## 🎯 Quick Start
 
-```bash
-# 1. Setup (once)
-bash setup_vae.sh
-
-# 2. Train β-VAE (2-4 hours)
-python train_vae.py --z-dim 128 --beta 1.0 --epochs 50
-
-# 3. Evaluate (20 minutes)
-python compute_threshold.py --model vae_best.pth
-python run_inference_vae.py --model vae_best.pth --test-csv test_set_heatmaps/test_set.csv
-python test_single_slide.py  # Demo on best tumor slide
-python compute_metrics.py --test-csv test_set_heatmaps/test_set.csv --scores-csv reconstruction_scores.csv
-```
-
-**That's it!** You'll have presentation-ready heatmaps and comprehensive metrics.
-
----
-
-## 📊 Features
-
-### **β-VAE Model**
-- 4 conv blocks encoder: 64→128→256→256 (stride 2)
-- Mirror decoder with ConvTranspose
-- GroupNorm for stability
-- Latent: z_dim ∈ {64, 128}
-- Loss: **L = 0.6×L1 + 0.4×(1-SSIM) + β×KL**
-- KL warm-up: 0→β over 10 epochs
-
-### **Complete Preprocessing**
-- ✅ **Stain normalization**: Macenko (primary) + Reinhard (fallback)
-- ✅ **RGB normalization**: Mean/std computed from PCam
-- ✅ **Data augmentation**: Flips, rotations, color jitter
-- ✅ **Quality filtering**: HSV tissue≥0.65, blur≥30
-
-### **Proper Heatmap Stitching**
-- ✅ **Per-slide z-score**: Removes scanner/stain drift
-- ✅ **Grid-based aggregation**: Exact, fast
-- ✅ **Gaussian smoothing**: Natural appearance
-- ✅ **Binary thresholding**: 99.7th percentile from training normals
-
-### **Comprehensive Evaluation**
-- ✅ **Patch-level**: AUC-ROC, PR-AUC, F1, Dice, IoU
-- ✅ **Pixel-level**: Heatmap-based AUC
-- ✅ **Slide-level**: FROC (Camelyon16 standard)
-
----
-
-## 📁 Data
-
-### **Training Set** (`final_dataset/`)
-- **147,471 normal tissue patches** from PCam
-- 96×96 pixels @ 10× magnification
-- Pre-validated by experts
-- No background, no artifacts
-
-### **Test Set** (`test_set_heatmaps/`)
-- **166,030 tissue tiles** from 8 CAMELYON16 tumor slides
-- 85% background rejection (HSV filtering)
-- Complete grid coverage for heatmap reconstruction
-- Ground truth masks for evaluation
-
----
-
-## 🏗️ Architecture
-
-```
-Input: [B, 3, 96, 96] (normalized tissue patch)
-  ↓
-Encoder: 96→48→24→12→6 (4×stride-2 conv + GroupNorm + LeakyReLU)
-  ↓
-Latent: z ~ N(μ, σ²), dim ∈ {64, 128}
-  ↓
-Decoder: 6→12→24→48→96 (4×ConvTranspose + GroupNorm + LeakyReLU)
-  ↓
-Output: [B, 3, 96, 96] (reconstructed patch)
-
-Loss: L = λ₁·L1 + λₛ·(1-SSIM) + β·KL(q(z|x) || N(0,1))
-      where λ₁=0.6, λₛ=0.4, β∈{1,3}
-```
-
----
-
-## 📈 Results
-
-### **Expected Performance**
-| Metric | Good | Excellent |
-|--------|------|-----------|
-| AUC-ROC | > 0.75 | > 0.85 |
-| PR-AUC | > 0.70 | > 0.80 |
-| FROC | > 0.60 | > 0.75 |
-| Tumor/Normal Ratio | > 2.0× | > 3.5× |
-
-### **Heatmap Visualization**
-- 🔵 **Blue**: Low reconstruction error (normal tissue)
-- 🟡 **Yellow**: Medium error (suspicious)
-- 🔴 **Red**: High error (tumor!)
-- ⬜ **White**: Background (not processed)
-
----
-
-## 🛠️ Installation
-
+### 1. Setup
 ```bash
 # Create conda environment
-conda create -n cam16 python=3.9 -y
+conda create -n cam16 python=3.11 -y
 conda activate cam16
 
 # Install dependencies
-conda install pytorch torchvision -c pytorch -y
 pip install -r requirements.txt
+
+# OR use setup script
+bash setup_vae.sh
+```
+
+### 2. Data Preprocessing (Already Done)
+```bash
+# Normalization stats computed from PCam normals
+python compute_normalization_stats.py
+
+# Test set created from CAMELYON16 tumor slides
+python create_test_set_for_heatmaps.py
+```
+
+### 3. Train Baseline Model
+```bash
+# B1: VAE-Skip96, β=3 (recommended baseline)
+python run_experiments.py --exp B1
+
+# B2: VAE-Skip96, β=1 (sharper reconstructions)
+python run_experiments.py --exp B2
+
+# Monitor training
+tail -f experiments/B1_VAE-Skip96-β3/training.log
+```
+
+### 4. Evaluate
+```bash
+# Compute threshold from training normals
+python compute_threshold.py \
+  --model experiments/B1_VAE-Skip96-β3/model_best.pth \
+  --output experiments/B1_VAE-Skip96-β3/threshold.txt
+
+# Run inference on test set
+python run_inference_vae.py \
+  --model experiments/B1_VAE-Skip96-β3/model_best.pth \
+  --test-csv test_set_heatmaps/test_set.csv \
+  --output experiments/B1_VAE-Skip96-β3/test_scores.csv
+
+# Compute metrics (AUC-ROC, PR-AUC, F1, IoU)
+python compute_metrics.py \
+  --test-csv test_set_heatmaps/test_set.csv \
+  --scores-csv experiments/B1_VAE-Skip96-β3/test_scores.csv
+
+# Generate heatmaps
+python stitch_heatmap.py \
+  --test-csv test_set_heatmaps/test_set.csv \
+  --scores-csv experiments/B1_VAE-Skip96-β3/test_scores.csv \
+  --output-dir experiments/B1_VAE-Skip96-β3/heatmaps
 ```
 
 ---
 
-## 📚 Documentation
+## 📊 Dataset
 
-- **README.md** ← You are here!
-- **COMPLETE_WORKFLOW.md** - Step-by-step guide
-- **VAE_TRAINING_GUIDE.md** - β-VAE details & troubleshooting
-- **BETA_VAE_SUMMARY.txt** - Quick reference
+### Training: PCam Normal Patches
+- **Source**: PatchCamelyon (derived from CAMELYON16)
+- **Samples**: 147,471 normal tissue patches (96×96 @ 10× magnification)
+- **Splits**: Combined train + validation (unsupervised learning)
 
----
-
-## 🎨 Heatmap Examples
-
-<div align="center">
-<img src="docs/example_heatmap.png" alt="Example heatmap" width="800"/>
-<p><i>4-panel comparison: Original WSI, Ground Truth, Heatmap, Overlay</i></p>
-</div>
+### Test: CAMELYON16 Tumor Tiles
+- **Source**: 8 tumor WSIs from CAMELYON16
+- **Samples**: ~20k tumor patches (96×96 @ level 2)
+- **Quality Filtering**: HSV-based tissue detection, blur filtering
 
 ---
 
-## 🔬 How It Works
+## 🏗️ Architecture: VAE-Skip96
 
-### **1. Training** (Unsupervised)
-- Train β-VAE on **normal tissue only** (147k patches)
-- Model learns to reconstruct normal morphology
-- No tumor labels needed!
+**U-Net style β-VAE with skip connections**
 
-### **2. Anomaly Detection**
-- Tumors are **out-of-distribution** → high reconstruction error
-- Score = 0.6×MSE + 0.4×(1-SSIM)
-- Per-slide z-score normalization for robustness
+```
+Encoder:  96 → 48 → 24 → 12 → 6 → 3  (5× downsampling)
+Channels:  3 → 64 → 128 → 256 → 256 → 256
 
-### **3. Heatmap Generation**
-- Grid-based stitching of tile scores
-- Gaussian smoothing for natural appearance
-- Overlay on WSI thumbnail
+Latent: z_ch × 3 × 3 (spatial, default z_ch=128)
 
-### **4. Evaluation**
-- Multiple metrics (patch, pixel, slide-level)
-- FROC analysis (Camelyon16 standard)
-- Binary thresholding (99.7th percentile)
+Decoder: Mirror with skip connections
+  - Skip e4 (6×6, 256ch) → dec5 output
+  - Skip e3 (12×12, 256ch) → dec4 output
+  - Skip e2 (24×24, 128ch) → dec3 output
+  - Skip e1 (48×48, 64ch) → dec2 output
 
----
+Norm: GroupNorm (8 groups)
+Parameters: ~5.8M
+```
 
-## 💡 Key Advantages
-
-1. **Unsupervised**: No tumor labels needed for training
-2. **Robust**: Stain normalization + per-slide z-score
-3. **Interpretable**: Visual heatmaps show localization
-4. **Comprehensive**: Multiple evaluation metrics
-5. **Production-ready**: Complete preprocessing pipeline
-6. **Fast**: 3-5 hours from data to results
+**Key Features**:
+- ✅ Skip connections → high-quality reconstructions
+- ✅ Spatial latent → preserves locality for heatmaps
+- ✅ GroupNorm → stable with small batches
 
 ---
 
-## 📊 Repository Structure
+## 🔬 Experiments
+
+| ID  | β   | Description                       | Status |
+|-----|-----|-----------------------------------|--------|
+| B1  | 3.0 | **Baseline** (recommended)        | 🏃 Running |
+| B2  | 1.0 | Lower β (sharper recon)           | ⏳ Pending |
+| A1  | 3.0 | ResNet18 encoder (transfer)       | 📝 TODO |
+| A2  | 3.0 | ResNet18 + Mahalanobis score      | 📝 TODO |
+| P1  | 3.0 | P4M equivariant (rotation-inv)    | 📝 TODO |
+| P2  | 3.0 | P4M + denoising (σ=0.03)          | 📝 TODO |
+
+See [EXPERIMENTS_README.md](EXPERIMENTS_README.md) for full details.
+
+---
+
+## 📐 Loss Function
+
+```
+L = λ₁·L1 + λₛ·(1 − SSIM) + β·KL
+```
+
+- **Reconstruction**: `λ₁=0.6` (L1), `λₛ=0.4` (1-SSIM)
+- **KL Divergence**: `β ∈ {1, 3}` with 10-epoch linear warm-up
+- **Rationale**: Higher β → more compressed latent → better anomaly detection
+
+---
+
+## 🧪 Preprocessing Pipeline
+
+### Stain Normalization
+- **Primary**: Macenko (biologically relevant, separates H&E stains)
+- **Fallback**: Reinhard (on failure for edge cases like fat/necrosis)
+- **Reference**: Fixed tile from PCam (`reference_tile.npy`)
+
+### RGB Normalization
+- Z-score using PCam-normal mean/std (`normalization_stats.npy`)
+- Applied after stain normalization
+
+### Quality Filtering (Test Set)
+```python
+# HSV-based tissue detection
+hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
+sat_blurred = cv2.GaussianBlur(hsv[:,:,1], (7,7), 0)
+
+# Reject if:
+max_sat < 0.07           # Background
+mean_val < 0.1           # Too dark
+mean_val > 0.9           # Overexposed
+blur_variance < 30       # Out of focus
+```
+
+### Augmentation (Training Only)
+- Flips: horizontal, vertical (p=0.5)
+- Rotations: 90° (p=0.5)
+- Color jitter: brightness ±10%, contrast ±10%, saturation ±5%, hue ±2°
+
+---
+
+## 📈 Evaluation Metrics
+
+### Patch-Level Classification
+- **AUC-ROC**: Discriminative ability
+- **PR-AUC**: Robust to class imbalance
+- **F1/Dice Score**: Harmonic mean of precision/recall
+- **IoU (Jaccard)**: Spatial overlap
+
+### Heatmap Quality (TODO)
+- **Pixel-level AUC**: Using ground truth masks
+- **FROC**: Free-response ROC (lesion detection)
+
+---
+
+## 🗂️ Repository Structure
 
 ```
 PathAE/
-├── README.md                         # This file
-├── COMPLETE_WORKFLOW.md              # Step-by-step guide
-├── VAE_TRAINING_GUIDE.md             # β-VAE details
+├── model_vae_skip.py          # VAE-Skip96 architecture
+├── train_vae_experiments.py   # Unified training script
+├── run_experiments.py         # Experiment runner
+├── dataset.py                 # PyTorch datasets
+├── stain_utils.py             # Macenko/Reinhard stain norm
 │
-├── train_vae.py                      # Train β-VAE
-├── run_inference_vae.py              # Compute reconstruction errors
-├── stitch_heatmap.py                 # Generate heatmaps
-├── compute_metrics.py                # Calculate metrics
-├── test_single_slide.py              # Quick demo on best slide
+├── compute_normalization_stats.py
+├── compute_threshold.py
+├── run_inference_vae.py
+├── compute_metrics.py
+├── stitch_heatmap.py
 │
-├── model_vae.py                      # β-VAE architecture
-├── dataset.py                        # PyTorch datasets
-├── stain_utils.py                    # Stain normalization
+├── scripts/
+│   ├── convert_xml_to_mask.py
+│   └── create_reference_tile.py
 │
-├── compute_normalization_stats.py    # RGB mean/std
-├── compute_threshold.py              # Anomaly threshold
-├── inspect_dataset.py                # Dataset monitoring
+├── experiments/               # Experiment outputs
+│   └── B1_VAE-Skip96-β3/
+│       ├── model_best.pth
+│       ├── config.json
+│       ├── training.log
+│       ├── reconstructions/
+│       └── checkpoints/
 │
-├── final_dataset/                    # 147k training normals
-├── test_set_heatmaps/                # 166k test tiles
-└── cam16_prepped/                    # Source WSIs & masks
+├── final_dataset/             # PCam normals (train)
+│   ├── dataset.csv
+│   └── tiles/...
+│
+├── test_set_heatmaps/         # CAMELYON16 tumors (test)
+│   ├── test_set.csv
+│   └── tiles/...
+│
+├── reference_tile.npy         # Macenko reference
+├── normalization_stats.npy    # PCam mean/std
+│
+├── EXPERIMENTS_README.md      # Detailed experiment guide
+└── requirements.txt
 ```
 
 ---
 
-## 🎯 Citation
+## 🔑 Key Insights
 
-If you use this pipeline, please cite:
+1. **β=3 vs β=1**: Higher β compresses latent more → better anomaly detection, lower reconstruction fidelity
+2. **Skip connections**: Critical for high-quality reconstructions (U-Net style)
+3. **Spatial latent**: 128×3×3 preserves spatial structure for accurate heatmaps
+4. **Stain normalization**: Macenko is biologically relevant; Reinhard fallback ensures robustness
+5. **Augmentations**: Essential for generalization across slides/scanners
 
-```bibtex
-@article{pcam2018,
-  title={1399 H\&E-stained sentinel lymph node sections of breast cancer patients: the CAMELYON dataset},
-  author={Veeling, Bastiaan S and others},
-  journal={GigaScience},
-  year={2018}
-}
+---
+
+## 📋 Requirements
+
+```
+opencv-python
+numpy
+pandas
+tqdm
+openslide-python
+torchstain>=1.3.1
+scikit-image
+requests
+
+# For β-VAE training
+torch
+torchvision
+albumentations
+pytorch-msssim
+scikit-learn
+scipy
+matplotlib
+Pillow
 ```
 
 ---
 
-## 📧 Contact
+## 🚀 Current Status
 
-For questions or issues, please open a GitHub issue.
+- ✅ Data preprocessing complete (PCam + CAMELYON16)
+- ✅ Stain normalization fixed (Macenko with Reinhard fallback)
+- ✅ VAE-Skip96 architecture implemented
+- 🏃 **B1 baseline training in progress** (epoch 1/50)
+- ⏳ B2 experiment pending
+- 📝 A1, A2, P1, P2 require additional implementations
 
 ---
 
-## ⭐ Star this repo if you find it useful!
+## 📚 References
 
-**Your feedback helps improve the pipeline for everyone!** 🚀
+- **CAMELYON16**: [https://camelyon16.grand-challenge.org/](https://camelyon16.grand-challenge.org/)
+- **PatchCamelyon (PCam)**: [https://github.com/basveeling/pcam](https://github.com/basveeling/pcam)
+- **β-VAE**: Higgins et al., "β-VAE: Learning Basic Visual Concepts with a Constrained Variational Framework"
+
+---
+
+## 📝 License
+
+Research use only.

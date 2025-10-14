@@ -46,7 +46,7 @@ def save_reconstructions(model, dataset, epoch, output_dir, mean, std, device, n
             img_vis = img.cpu().numpy().transpose(1, 2, 0)
             recon_vis = recon[0].cpu().numpy().transpose(1, 2, 0)
             
-            # Denormalize: x_orig = x_norm * std + mean
+            # Denormalize both (decoder outputs normalized space, not [0,1])
             img_vis = img_vis * std + mean
             recon_vis = recon_vis * std + mean
             
@@ -73,6 +73,39 @@ def save_reconstructions(model, dataset, epoch, output_dir, mean, std, device, n
     plt.close()
     
     model.train()
+
+
+def plot_loss_curves(history, output_path):
+    """Plot and save loss curves."""
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    
+    epochs = range(1, len(history['total']) + 1)
+    
+    # Total loss
+    axes[0].plot(epochs, history['total'], 'b-', linewidth=2)
+    axes[0].set_xlabel('Epoch')
+    axes[0].set_ylabel('Total Loss')
+    axes[0].set_title('Total Loss')
+    axes[0].grid(True, alpha=0.3)
+    
+    # Reconstruction loss
+    axes[1].plot(epochs, history['recon'], 'g-', linewidth=2)
+    axes[1].set_xlabel('Epoch')
+    axes[1].set_ylabel('Reconstruction Loss')
+    axes[1].set_title('Reconstruction Loss (L1 + SSIM)')
+    axes[1].grid(True, alpha=0.3)
+    
+    # KL divergence
+    axes[2].plot(epochs, history['kl'], 'r-', linewidth=2)
+    axes[2].set_xlabel('Epoch')
+    axes[2].set_ylabel('KL Divergence')
+    axes[2].set_title('KL Divergence')
+    axes[2].grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"  ✓ Loss curves saved to: {output_path}")
 
 
 def train_epoch(model, loader, optimizer, kl_scheduler, lambda_l1, lambda_ssim, device):
@@ -148,6 +181,10 @@ def main():
     
     # Output
     parser.add_argument('--output', type=str, default='vae_best.pth')
+    parser.add_argument('--checkpoint-dir', type=str, default='checkpoints',
+                        help='Directory to save model checkpoints')
+    parser.add_argument('--checkpoint-every', type=int, default=5,
+                        help='Save checkpoint every N epochs')
     parser.add_argument('--recon-dir', type=str, default='reconstructions',
                         help='Directory to save reconstruction visualizations')
     parser.add_argument('--save-every', type=int, default=1,
@@ -241,6 +278,17 @@ def main():
     
     best_loss = float('inf')
     
+    # Loss history tracking
+    loss_history = {
+        'total': [],
+        'recon': [],
+        'kl': [],
+    }
+    
+    # Create checkpoint directory
+    checkpoint_dir = Path(args.checkpoint_dir)
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    
     # Create validation dataset for reconstruction monitoring (no augmentation)
     val_dataset = TissueDataset(
         csv_path=args.data_csv,
@@ -259,6 +307,11 @@ def main():
             model, train_loader, optimizer, kl_warmup,
             args.lambda_l1, args.lambda_ssim, device
         )
+        
+        # Track loss history
+        loss_history['total'].append(metrics['loss'])
+        loss_history['recon'].append(metrics['recon'])
+        loss_history['kl'].append(metrics['kl'])
         
         # Print progress
         print(f"Epoch {epoch+1:3d}/{args.epochs} | "
@@ -286,11 +339,33 @@ def main():
                     'num_groups': args.num_groups,
                     'mean': mean,
                     'std': std,
-                }
+                },
+                'loss_history': loss_history,
             }, args.output)
             print(" ← Best!")
         else:
             print()
+        
+        # Save checkpoint
+        if (epoch + 1) % args.checkpoint_every == 0:
+            checkpoint_path = checkpoint_dir / f'checkpoint_epoch_{epoch+1:03d}.pth'
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'loss': metrics['loss'],
+                'config': {
+                    'z_dim': args.z_dim,
+                    'beta': args.beta,
+                    'lambda_l1': args.lambda_l1,
+                    'lambda_ssim': args.lambda_ssim,
+                    'num_groups': args.num_groups,
+                    'mean': mean,
+                    'std': std,
+                },
+                'loss_history': loss_history,
+            }, checkpoint_path)
+            print(f"  ✓ Checkpoint saved to: {checkpoint_path}")
         
         # Save reconstructions
         if (epoch + 1) % args.save_every == 0:
@@ -298,7 +373,11 @@ def main():
                 model, val_dataset, epoch+1, args.recon_dir,
                 np.array(mean), np.array(std), device
             )
-            print(f"  ✓ Saved reconstructions to {args.recon_dir}/recon_epoch_{epoch+1:03d}.png")
+            print(f"  ✓ Reconstructions saved to: {args.recon_dir}/recon_epoch_{epoch+1:03d}.png")
+        
+        # Plot loss curves
+        if (epoch + 1) % args.checkpoint_every == 0 or (epoch + 1) == args.epochs:
+            plot_loss_curves(loss_history, f'{args.recon_dir}/loss_curves.png')
         
         # Step KL warmup
         kl_warmup.step()

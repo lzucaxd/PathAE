@@ -28,16 +28,23 @@ except ImportError:
 class StainNormalizer:
     """
     Stain normalization with Macenko (primary) or Reinhard (fallback).
+    
+    Macenko is biologically relevant (separates H&E stains) but can fail on:
+    - Low saturation patches (background, fat, necrosis)
+    - Ill-conditioned matrices (uniform color)
+    
+    Auto-fallback to Reinhard on failure for robustness.
     """
     
     def __init__(self, reference_path='reference_tile.npy', method='macenko'):
         """
         Args:
             reference_path: Path to reference tile (.npy file with RGB image)
-            method: 'macenko' or 'reinhard'
+            method: 'macenko' (default, biologically relevant) or 'reinhard' (simpler)
         """
         self.method = method
         self.reference_path = Path(reference_path)
+        self.fallback_count = 0  # Track how often Macenko fails
         
         # Load reference tile
         if self.reference_path.exists():
@@ -45,24 +52,42 @@ class StainNormalizer:
             print(f"Loaded reference tile: {self.reference_path}")
         else:
             print(f"Warning: Reference tile not found at {self.reference_path}")
-            print("Creating default reference from first image...")
+            print("Will use first image as reference...")
             self.reference = None
         
-        # Initialize normalizer
+        # Initialize normalizers
+        self.macenko_normalizer = None
+        self.reinhard_stats_fitted = False
+        
         if method == 'macenko' and TORCHSTAIN_AVAILABLE:
-            self.normalizer = MacenkoNormalizer()
+            import torch
+            self.macenko_normalizer = MacenkoNormalizer()
             if self.reference is not None:
-                self.normalizer.fit(self.reference)
-                self.fitted = True
+                try:
+                    # Fit Macenko to reference
+                    if isinstance(self.reference, np.ndarray):
+                        ref_tensor = torch.from_numpy(self.reference).permute(2, 0, 1).float()
+                    else:
+                        ref_tensor = self.reference
+                    self.macenko_normalizer.fit(ref_tensor)
+                    self.fitted = True
+                    print("  ✓ Macenko normalizer fitted")
+                except Exception as e:
+                    print(f"  ⚠ Macenko fit failed: {e}, will use Reinhard")
+                    self.method = 'reinhard'
+                    self.fitted = False
             else:
                 self.fitted = False
-        elif method == 'reinhard' or not TORCHSTAIN_AVAILABLE:
+        else:
             self.method = 'reinhard'
-            if self.reference is not None:
-                self._compute_reinhard_stats(self.reference)
-            else:
-                self.ref_means = None
-                self.ref_stds = None
+        
+        # Always compute Reinhard stats as fallback
+        if self.reference is not None:
+            self._compute_reinhard_stats(self.reference)
+            self.reinhard_stats_fitted = True
+        else:
+            self.ref_means = None
+            self.ref_stds = None
     
     def _compute_reinhard_stats(self, img):
         """Compute LAB statistics for Reinhard normalization."""
@@ -74,6 +99,8 @@ class StainNormalizer:
         """
         Normalize stain of input image.
         
+        Tries Macenko first (if enabled), falls back to Reinhard on failure.
+        
         Args:
             img_rgb: RGB image (uint8, 0-255) [H, W, 3]
             
@@ -83,40 +110,76 @@ class StainNormalizer:
         if img_rgb is None or img_rgb.size == 0:
             return img_rgb
         
-        try:
-            if self.method == 'macenko' and TORCHSTAIN_AVAILABLE:
-                if not self.fitted and self.reference is None:
-                    # Use first image as reference
-                    self.normalizer.fit(img_rgb)
+        # Try Macenko first if enabled
+        if self.method == 'macenko' and TORCHSTAIN_AVAILABLE and self.macenko_normalizer is not None:
+            try:
+                import torch
+                
+                # Fit if not done yet
+                if not self.fitted:
+                    ref_tensor = torch.from_numpy(img_rgb).permute(2, 0, 1).float()
+                    self.macenko_normalizer.fit(ref_tensor)
                     self.fitted = True
+                    # Also compute Reinhard as fallback
+                    if not self.reinhard_stats_fitted:
+                        self._compute_reinhard_stats(img_rgb)
+                        self.reinhard_stats_fitted = True
                     return img_rgb
                 
                 # Normalize
-                normalized = self.normalizer.normalize(img_rgb)
+                img_tensor = torch.from_numpy(img_rgb).permute(2, 0, 1).float()
+                norm_result = self.macenko_normalizer.normalize(img_tensor)
+                
+                # Handle tuple return (normalized, H, E)
+                if isinstance(norm_result, tuple):
+                    norm_tensor = norm_result[0]
+                else:
+                    norm_tensor = norm_result
+                
+                # Convert back to numpy
+                if norm_tensor.dim() == 3:
+                    if norm_tensor.shape[0] == 3:  # [C, H, W]
+                        normalized = norm_tensor.permute(1, 2, 0).cpu().numpy()
+                    else:  # [H, W, C]
+                        normalized = norm_tensor.cpu().numpy()
+                else:
+                    normalized = norm_tensor.cpu().numpy()
+                
+                # Ensure uint8
+                normalized = np.clip(normalized, 0, 255).astype(np.uint8)
                 return normalized
-            
-            else:  # Reinhard
-                if self.ref_means is None:
-                    # Use first image as reference
-                    self._compute_reinhard_stats(img_rgb)
-                    return img_rgb
                 
-                # Convert to LAB
-                lab = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2LAB).astype(np.float32)
-                
-                # Normalize
-                means = lab.reshape(-1, 3).mean(axis=0)
-                stds = lab.reshape(-1, 3).std(axis=0)
-                
-                lab_norm = (lab - means) / (stds + 1e-6) * self.ref_stds + self.ref_means
-                lab_norm = np.clip(lab_norm, 0, 255).astype(np.uint8)
-                
-                # Convert back to RGB
-                rgb_norm = cv2.cvtColor(lab_norm, cv2.COLOR_LAB2RGB)
-                return rgb_norm
+            except Exception as e:
+                # Macenko failed - use Reinhard fallback silently
+                self.fallback_count += 1
+                if self.fallback_count <= 3:  # Only print first few failures
+                    pass  # Silent fallback for cleaner logs
+                # Fall through to Reinhard below
         
+        # Reinhard normalization (fallback or primary)
+        try:
+            if self.ref_means is None:
+                # Use first image as reference
+                self._compute_reinhard_stats(img_rgb)
+                self.reinhard_stats_fitted = True
+                return img_rgb
+            
+            # Convert to LAB
+            lab = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2LAB).astype(np.float32)
+            
+            # Normalize
+            means = lab.reshape(-1, 3).mean(axis=0)
+            stds = lab.reshape(-1, 3).std(axis=0)
+            
+            lab_norm = (lab - means) / (stds + 1e-6) * self.ref_stds + self.ref_means
+            lab_norm = np.clip(lab_norm, 0, 255).astype(np.uint8)
+            
+            # Convert back to RGB
+            rgb_norm = cv2.cvtColor(lab_norm, cv2.COLOR_LAB2RGB)
+            return rgb_norm
+            
         except Exception as e:
-            print(f"Warning: Stain normalization failed: {e}")
+            # Last resort - return original
             return img_rgb
 
 
