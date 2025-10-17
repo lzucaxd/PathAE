@@ -14,7 +14,9 @@ from pathlib import Path
 from tqdm import tqdm
 
 from dataset import TestDataset
+# from model_vae import BetaVAE
 from model_vae_skip import VAESkip96
+
 from pytorch_msssim import ssim
 from torch.utils.data import DataLoader
 
@@ -54,8 +56,15 @@ def main():
     
     config = checkpoint['config']
     z_dim = config['z_dim']
-    mean = config['mean']
-    std = config['std']
+    # mean = config['mean']
+    # std = config['std']
+    # Get mean/std from config, or use defaults
+    if 'mean' not in config:
+        mean = np.array([0.182, 0.182, 0.182])
+        std = np.array([0.427, 0.427, 0.427])
+    else:
+        mean = config['mean']
+        std = config['std']
     
     # Load model (supports both old BetaVAE and new VAESkip96)
     model = VAESkip96(z_ch=z_dim, num_groups=config.get('num_groups', 8)).to(device)
