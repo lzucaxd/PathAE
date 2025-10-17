@@ -24,6 +24,9 @@ reconstructions/
 checkpoints/
 demo_heatmap/
 heatmaps_v2/
+heatmaps/
+*.csv
+!requirements.txt
 
 # Keep preprocessing outputs
 !reference_tile.npy

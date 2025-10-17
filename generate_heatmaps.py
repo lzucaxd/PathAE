@@ -34,15 +34,25 @@ def create_heatmap_from_scores(test_csv, scores_csv, wsi_path, mask_path, output
         canvas_level: Pyramid level for canvas (higher = smaller image)
         alpha: Transparency for overlay
     """
+    # Extract wsi_id from path
+    wsi_id = Path(wsi_path).stem  # e.g., "tumor_008" from "tumor_008.tif"
+    
     # Load data
     tiles_df = pd.read_csv(test_csv)
     scores_df = pd.read_csv(scores_csv)
+    
+    # Filter to current slide only
+    tiles_df = tiles_df[tiles_df['wsi_id'] == wsi_id].copy()
+    
+    if len(tiles_df) == 0:
+        print(f"  Warning: No tiles found for {wsi_id}, skipping...")
+        return
     
     # Merge scores with tiles
     df = tiles_df.merge(scores_df, on='tile_id', how='left')
     df['score'] = df['score'].fillna(0)
     
-    # Get grid dimensions from first tile
+    # Get grid dimensions from first tile of THIS slide
     grid_rows = int(df.iloc[0]['grid_rows'])
     grid_cols = int(df.iloc[0]['grid_cols'])
     

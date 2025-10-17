@@ -14,17 +14,20 @@ from pathlib import Path
 from tqdm import tqdm
 
 from dataset import TestDataset
-from model_vae import BetaVAE
+from model_vae_skip import VAESkip96
 from pytorch_msssim import ssim
+from torch.utils.data import DataLoader
 
 
 def main():
     parser = argparse.ArgumentParser(description='Run VAE inference')
-    parser.add_argument('--model', type=str, required=True)
+    parser.add_argument('--model-path', '--model', type=str, required=True, dest='model',
+                        help='Path to trained model checkpoint')
     parser.add_argument('--test-csv', type=str, required=True)
     parser.add_argument('--reference-tile', type=str, default='reference_tile.npy')
     parser.add_argument('--output', type=str, default='reconstruction_scores.csv')
     parser.add_argument('--batch-size', type=int, default=128)
+    parser.add_argument('--num-workers', type=int, default=4)
     parser.add_argument('--stain-norm', action='store_true', default=True)
     parser.add_argument('--no-stain-norm', action='store_false', dest='stain_norm')
     
@@ -54,12 +57,15 @@ def main():
     mean = config['mean']
     std = config['std']
     
-    model = BetaVAE(z_dim=z_dim, num_groups=config.get('num_groups', 8)).to(device)
+    # Load model (supports both old BetaVAE and new VAESkip96)
+    model = VAESkip96(z_ch=z_dim, num_groups=config.get('num_groups', 8)).to(device)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
     
+    print(f"  Model: {config.get('model', 'skip96')}")
     print(f"  z_dim: {z_dim}")
-    print(f"  Training loss: {checkpoint['loss']:.6f}")
+    print(f"  Train loss: {checkpoint.get('train_loss', checkpoint.get('loss', 'N/A'))}")
+    print(f"  Val loss: {checkpoint.get('val_loss', 'N/A')}")
     print(f"  β: {config['beta']}")
     print()
     
@@ -78,7 +84,7 @@ def main():
         test_dataset,
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=4,
+        num_workers=args.num_workers,
         pin_memory=True,
     )
     
@@ -92,19 +98,26 @@ def main():
     print("Computing reconstruction errors (0.6*MSE + 0.4*(1-SSIM))...")
     results = []
     
+    # Convert mean/std to tensors for denormalization
+    mean_t = torch.tensor(mean, device=device, dtype=torch.float32).view(1, 3, 1, 1)
+    std_t = torch.tensor(std, device=device, dtype=torch.float32).view(1, 3, 1, 1)
+    
     with torch.no_grad():
         for images, tile_ids in tqdm(test_loader, desc="Processing"):
             images = images.to(device)
             
-            # Reconstruction (use mean of latent, not sampled)
-            mu, _ = model.encode(images)
-            recon = model.decode(mu)
+            # Reconstruction (use mean of latent, not sampled; use_mean=True)
+            recon, mu, logvar = model(images, use_mean=True)
             
-            # MSE per tile (in normalized space)
-            mse = ((images - recon) ** 2).mean(dim=[1, 2, 3])
+            # Denormalize to [0,1] for proper MSE and SSIM computation
+            recon_01 = torch.clamp(recon * std_t + mean_t, 0, 1)
+            images_01 = torch.clamp(images * std_t + mean_t, 0, 1)
             
-            # SSIM per tile
-            ssim_vals = ssim(images, recon, data_range=1.0, size_average=False)
+            # MSE per tile (in [0,1] space)
+            mse = ((images_01 - recon_01) ** 2).mean(dim=[1, 2, 3])
+            
+            # SSIM per tile (in [0,1] space)
+            ssim_vals = ssim(images_01, recon_01, data_range=1.0, size_average=False)
             
             # Combined score: 0.6*MSE + 0.4*(1-SSIM)
             combined_score = 0.6 * mse + 0.4 * (1.0 - ssim_vals)
