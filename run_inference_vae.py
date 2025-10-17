@@ -14,7 +14,10 @@ from pathlib import Path
 from tqdm import tqdm
 
 from dataset import TestDataset
-from model_vae import BetaVAE
+# from model_vae import BetaVAE
+from model_vae_skip import VAESkip96
+
+from torch.utils.data import DataLoader
 from pytorch_msssim import ssim
 
 
@@ -51,15 +54,22 @@ def main():
     
     config = checkpoint['config']
     z_dim = config['z_dim']
-    mean = config['mean']
-    std = config['std']
+    # mean = config['mean']
+    # std = config['std']
+    # Get mean/std from config, or use defaults
+    if 'mean' not in config:
+        mean = np.array([0.182, 0.182, 0.182])
+        std = np.array([0.427, 0.427, 0.427])
+    else:
+        mean = config['mean']
+        std = config['std']
     
-    model = BetaVAE(z_dim=z_dim, num_groups=config.get('num_groups', 8)).to(device)
+    model = VAESkip96(z_ch=z_dim, num_groups=config.get('num_groups', 8)).to(device)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
     
     print(f"  z_dim: {z_dim}")
-    print(f"  Training loss: {checkpoint['loss']:.6f}")
+    print(f"  Training loss: {checkpoint['val_loss']:.6f}")
     print(f"  β: {config['beta']}")
     print()
     
@@ -97,8 +107,10 @@ def main():
             images = images.to(device)
             
             # Reconstruction (use mean of latent, not sampled)
-            mu, _ = model.encode(images)
-            recon = model.decode(mu)
+            # mu, _ = model.encode(images)
+            # recon = model.decode(mu)
+            mu, logvar, skips = model.encode(images)
+            recon = model.decode(mu, skips)
             
             # MSE per tile (in normalized space)
             mse = ((images - recon) ** 2).mean(dim=[1, 2, 3])

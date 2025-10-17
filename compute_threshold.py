@@ -13,8 +13,8 @@ import cv2
 from pathlib import Path
 from tqdm import tqdm
 
-from model_vae import BetaVAE
-
+#from model_vae import BetaVAE
+from model_vae_skip import VAESkip96
 
 def compute_threshold_from_normals(model_path, data_csv, n_samples=5000, percentile=99.7):
     """
@@ -50,10 +50,18 @@ def compute_threshold_from_normals(model_path, data_csv, n_samples=5000, percent
     
     config = checkpoint['config']
     z_dim = config['z_dim']
-    mean = config['mean']
-    std = config['std']
+    # mean = config['mean']
+    # std = config['std']
     
-    model = BetaVAE(z_dim=z_dim, num_groups=config.get('num_groups', 8)).to(device)
+    # Fallback for mean/std if not in config
+    if 'mean' in config:
+        mean = config['mean']
+        std = config['std']
+    else:
+        mean = np.array([0.182, 0.182, 0.182])
+        std = np.array([0.427, 0.427, 0.427])
+    
+    model = VAESkip96(z_ch=z_dim, num_groups=config.get('num_groups', 8)).to(device)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
     
@@ -93,8 +101,8 @@ def compute_threshold_from_normals(model_path, data_csv, n_samples=5000, percent
             img_batch = img_tensor.unsqueeze(0).to(device)
             
             # Reconstruct
-            mu, _ = model.encode(img_batch)
-            recon = model.decode(mu)
+            mu, logvar, skips = model.encode(img_batch)
+            recon = model.decode(mu, skips)
             
             # Compute error (MSE in normalized space)
             mse = ((img_batch - recon) ** 2).mean().item()
