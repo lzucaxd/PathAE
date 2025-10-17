@@ -17,7 +17,6 @@ from dataset import TestDataset
 # from model_vae import BetaVAE
 from model_vae_skip import VAESkip96
 
-from torch.utils.data import DataLoader
 from pytorch_msssim import ssim
 from torch.utils.data import DataLoader
 
