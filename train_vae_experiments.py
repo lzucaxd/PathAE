@@ -21,7 +21,11 @@ import matplotlib.pyplot as plt
 import json
 
 from dataset import TissueDataset
-from model_vae_skip import VAESkip96, vae_loss, KLWarmup, KLCapacity
+from model_vae_skip import VAESkip96, KLCapacity
+from model_vae_pure import VAEPure96
+from model_vae_freebits import VAEFreeBits96, free_bits_vae_loss, KLWarmup
+from model_ae import AE96, ae_loss
+from model_vae_resnet import VAEResNet96
 
 
 def add_noise(x, sigma=0.03):
@@ -39,24 +43,28 @@ def save_reconstructions(model, dataset, epoch, output_dir, mean, std, device, n
     
     fig, axes = plt.subplots(2, n_samples, figsize=(n_samples*2, 4))
     
+    # Convert mean/std to numpy arrays for broadcasting
+    mean_np = np.array(mean, dtype=np.float32)
+    std_np = np.array(std, dtype=np.float32)
+    
     with torch.no_grad():
         for i in range(n_samples):
             # Get sample
             img, _ = dataset[i]
             img_batch = img.unsqueeze(0).to(device)
             
-            # Reconstruct (use mean for stable visualization)
-            recon, mu, logvar = model(img_batch, use_mean=True)
+            # Reconstruct (no use_mean parameter for FreeBits VAE)
+            recon, mu, logvar = model(img_batch)
             
-            # Denormalize for visualization
-            img_vis = img.cpu().numpy().transpose(1, 2, 0)
-            recon_vis = recon[0].cpu().numpy().transpose(1, 2, 0)
+            # Move to CPU and transpose to HWC format
+            img_vis = img.cpu().numpy().transpose(1, 2, 0)  # Already normalized
+            recon_vis = recon[0].cpu().numpy().transpose(1, 2, 0)  # Model outputs normalized
             
-            # Denormalize both (decoder outputs normalized space)
-            img_vis = img_vis * std + mean
-            recon_vis = recon_vis * std + mean
+            # Denormalize both: (x * std) + mean
+            img_vis = img_vis * std_np + mean_np
+            recon_vis = recon_vis * std_np + mean_np
             
-            # Clip to [0, 1]
+            # Clip to [0, 1] for display
             img_vis = np.clip(img_vis, 0, 1)
             recon_vis = np.clip(recon_vis, 0, 1)
             
@@ -75,7 +83,7 @@ def save_reconstructions(model, dataset, epoch, output_dir, mean, std, device, n
     plt.tight_layout()
     
     output_path = output_dir / f'recon_epoch_{epoch:03d}.png'
-    plt.savefig(output_path, dpi=100, bbox_inches='tight')
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close()
     
     model.train()
@@ -120,7 +128,7 @@ def plot_loss_curves(history, output_path):
 
 
 def train_epoch(model, loader, optimizer, kl_scheduler, capacity_scheduler, mean, std, 
-                lambda_l1, lambda_ssim, device, denoise_sigma=0.0):
+                lambda_l1, lambda_ssim, device, denoise_sigma=0.0, use_freebits=False, free_bits=0.5, use_ae=False):
     """Train for one epoch."""
     model.train()
     
@@ -128,10 +136,18 @@ def train_epoch(model, loader, optimizer, kl_scheduler, capacity_scheduler, mean
     total_recon = 0.0
     total_kl = 0.0
     
-    beta = kl_scheduler.get_beta()
-    capacity = capacity_scheduler.get_capacity()
+    beta = kl_scheduler.get_beta() if not use_ae else 0.0
+    capacity = capacity_scheduler.get_capacity() if not use_ae else 0.0
     
-    for batch_idx, (images, _) in enumerate(tqdm(loader, desc=f"Training (β={beta:.2f}, C={capacity:.1f})", leave=False)):
+    # Simplify progress bar
+    if use_ae:
+        desc = "Training (AE - no KL)"
+    elif capacity > 0:
+        desc = f"Training (β={beta:.2f}, C={capacity:.1f})"
+    else:
+        desc = f"Training (β={beta:.2f})"
+    
+    for batch_idx, (images, _) in enumerate(tqdm(loader, desc=desc, leave=False)):
         images = images.to(device)
         
         # Optional denoising (add noise to input, reconstruct clean)
@@ -142,16 +158,36 @@ def train_epoch(model, loader, optimizer, kl_scheduler, capacity_scheduler, mean
         else:
             recon, mu, logvar = model(images)
         
-        # Loss
-        loss, loss_dict = vae_loss(
-            recon, images, mu, logvar,
-            mean=mean,
-            std=std,
-            lambda_l1=lambda_l1,
-            lambda_ssim=lambda_ssim,
-            beta=beta,
-            capacity=capacity
-        )
+        # Loss (AE, free-bits, or regular VAE)
+        if use_ae:
+            loss, loss_dict = ae_loss(
+                recon, images,
+                mean=mean,
+                std=std,
+                lambda_l1=lambda_l1,
+                lambda_ssim=lambda_ssim
+            )
+        elif use_freebits:
+            loss, loss_dict = free_bits_vae_loss(
+                recon, images, mu, logvar,
+                mean=mean,
+                std=std,
+                lambda_l1=lambda_l1,
+                lambda_ssim=lambda_ssim,
+                beta=beta,
+                free_bits=free_bits
+            )
+        else:
+            from model_vae_pure import vae_loss
+            loss, loss_dict = vae_loss(
+                recon, images, mu, logvar,
+                mean=mean,
+                std=std,
+                lambda_l1=lambda_l1,
+                lambda_ssim=lambda_ssim,
+                beta=beta,
+                capacity=capacity
+            )
         
         # Backward
         optimizer.zero_grad()
@@ -170,7 +206,8 @@ def train_epoch(model, loader, optimizer, kl_scheduler, capacity_scheduler, mean
     }
 
 
-def validate_epoch(model, loader, capacity_scheduler, mean, std, lambda_l1, lambda_ssim, beta, device):
+def validate_epoch(model, loader, capacity_scheduler, mean, std, lambda_l1, lambda_ssim, beta, device, 
+                   use_freebits=False, free_bits=0.5, use_ae=False):
     """Validate for one epoch (no gradient, no noise)."""
     model.eval()
     
@@ -178,25 +215,48 @@ def validate_epoch(model, loader, capacity_scheduler, mean, std, lambda_l1, lamb
     total_recon = 0.0
     total_kl = 0.0
     
-    capacity = capacity_scheduler.get_capacity()
+    capacity = capacity_scheduler.get_capacity() if not use_ae else 0.0
     
     with torch.no_grad():
         for batch_idx, (images, _) in enumerate(tqdm(loader, desc=f"Validation", leave=False)):
             images = images.to(device)
             
-            # Forward (no noise, use mean for stable inference)
-            recon, mu, logvar = model(images, use_mean=False)  # Still sample for proper KL
+            # Forward (no noise)
+            if use_ae:
+                recon, mu, logvar = model(images)  # AE is deterministic
+            else:
+                recon, mu, logvar = model(images, use_mean=False)  # VAE still samples for proper KL
             
-            # Loss
-            loss, loss_dict = vae_loss(
-                recon, images, mu, logvar,
-                mean=mean,
-                std=std,
-                lambda_l1=lambda_l1,
-                lambda_ssim=lambda_ssim,
-                beta=beta,
-                capacity=capacity
-            )
+            # Loss (AE, free-bits, or regular VAE)
+            if use_ae:
+                loss, loss_dict = ae_loss(
+                    recon, images,
+                    mean=mean,
+                    std=std,
+                    lambda_l1=lambda_l1,
+                    lambda_ssim=lambda_ssim
+                )
+            elif use_freebits:
+                loss, loss_dict = free_bits_vae_loss(
+                    recon, images, mu, logvar,
+                    mean=mean,
+                    std=std,
+                    lambda_l1=lambda_l1,
+                    lambda_ssim=lambda_ssim,
+                    beta=beta,
+                    free_bits=free_bits
+                )
+            else:
+                from model_vae_pure import vae_loss
+                loss, loss_dict = vae_loss(
+                    recon, images, mu, logvar,
+                    mean=mean,
+                    std=std,
+                    lambda_l1=lambda_l1,
+                    lambda_ssim=lambda_ssim,
+                    beta=beta,
+                    capacity=capacity
+                )
             
             total_loss += loss_dict['total']
             total_recon += loss_dict['recon']
@@ -215,8 +275,8 @@ def main():
     # Experiment
     parser.add_argument('--exp-id', type=str, required=True,
                         help='Experiment ID (B1, B2, A1, A2, P1, P2)')
-    parser.add_argument('--model', type=str, default='skip96',
-                        choices=['skip96', 'resnet18', 'p4m'])
+    parser.add_argument(        '--model', type=str, default='skip96',
+                        choices=['skip96', 'pure', 'freebits', 'ae', 'resnet', 'p4m'])
     
     # Data
     parser.add_argument('--data-csv', type=str, default='final_dataset/dataset.csv')
@@ -226,14 +286,19 @@ def main():
     # Model
     parser.add_argument('--z-dim', type=int, default=128)
     parser.add_argument('--num-groups', type=int, default=8)
+    parser.add_argument('--skip-dropout', type=float, default=0.25,
+                        help='Dropout rate for skip connections (higher = more regularization)')
     
     # Loss
     parser.add_argument('--lambda-l1', type=float, default=0.6)
     parser.add_argument('--lambda-ssim', type=float, default=0.4)
     parser.add_argument('--beta', type=float, default=1.0, help='KL weight (use 1.0 with capacity)')
-    parser.add_argument('--kl-warmup', type=int, default=5, help='β warm-up epochs (0→β_max)')
-    parser.add_argument('--capacity-max', type=float, default=120.0, 
+    parser.add_argument('--beta-min', type=float, default=0.1, help='Starting β value (0.1-0.3 prevents latent bypass)')
+    parser.add_argument('--kl-warmup', type=int, default=5, help='β warm-up epochs (beta_min→beta_max)')
+    parser.add_argument('--capacity-max', type=float, default=120.0,
                         help='Max KL capacity in nats (prevents collapse)')
+    parser.add_argument('--free-bits', type=float, default=0.5,
+                        help='Minimum KL per dimension (nats) for free-bits VAE')
     
     # Training
     parser.add_argument('--epochs', type=int, default=50)
@@ -272,6 +337,7 @@ def main():
     print(f"  Device: {device}")
     print(f"  Model: {args.model}")
     print(f"  z_dim: {args.z_dim}")
+    print(f"  skip_dropout: {args.skip_dropout}")
     print(f"  β: {args.beta} (warmup over {args.kl_warmup} epochs)")
     print(f"  λ_L1: {args.lambda_l1}, λ_SSIM: {args.lambda_ssim}")
     print(f"  Denoise: {args.denoise} (σ={args.noise_sigma if args.denoise else 0})")
@@ -357,11 +423,22 @@ def main():
     # Model
     print(f"Building {args.model}...")
     if args.model == 'skip96':
-        model = VAESkip96(z_ch=args.z_dim, num_groups=args.num_groups).to(device)
-    elif args.model == 'resnet18':
-        raise NotImplementedError("ResNet18 VAE not implemented yet")
+        model = VAESkip96(z_ch=args.z_dim, num_groups=args.num_groups, skip_dropout=args.skip_dropout).to(device)
+    elif args.model == 'pure':
+        model = VAEPure96(z_ch=args.z_dim, num_groups=args.num_groups).to(device)
+    elif args.model == 'freebits':
+        model = VAEFreeBits96(z_ch=args.z_dim, num_groups=args.num_groups).to(device)
+        print(f"  Free-bits constraint: {args.free_bits} nats/dim")
+    elif args.model == 'ae':
+        model = AE96(z_dim=args.z_dim, num_groups=args.num_groups).to(device)
+        print(f"  Standard AE (no KL, no collapse)")
+    elif args.model == 'resnet':
+        model = VAEResNet96(z_ch=args.z_dim, num_groups=args.num_groups).to(device)
+        print(f"  ResNet-based VAE (trained from scratch)")
     elif args.model == 'p4m':
         raise NotImplementedError("P4M VAE not implemented yet")
+    else:
+        raise ValueError(f"Unknown model: {args.model}")
     
     total_params = sum(p.numel() for p in model.parameters())
     print(f"  Parameters: {total_params:,}")
@@ -373,8 +450,8 @@ def main():
         optimizer, T_max=args.epochs, eta_min=1e-5
     )
     
-    # KL warm-up (β: 0→1.0 over 5 epochs)
-    kl_warmup = KLWarmup(beta_max=args.beta, warmup_epochs=args.kl_warmup)
+    # KL warm-up (β: beta_min→beta_max over warmup epochs)
+    kl_warmup = KLWarmup(beta_max=args.beta, warmup_epochs=args.kl_warmup, beta_min=args.beta_min)
     
     # KL capacity scheduling (C: 0→120 nats over 20 epochs)
     capacity_scheduler = KLCapacity(capacity_max=args.capacity_max, warmup_epochs=args.epochs)
@@ -382,6 +459,11 @@ def main():
     print("="*70)
     print("TRAINING")
     print("="*70)
+    if args.model != 'ae' and args.kl_warmup > 0:
+        print(f"\nNote: Warm-up active for first {args.kl_warmup} epochs (β: 0→{args.beta})")
+        print(f"      Best model tracking starts at epoch {args.kl_warmup+1}\n")
+    elif args.model == 'ae':
+        print(f"\nNote: Standard AE (no KL divergence, no collapse)\n")
     print()
     
     best_loss = float('inf')
@@ -416,17 +498,27 @@ def main():
     # Training loop
     for epoch in range(args.epochs):
         # Train
+        # Determine model type
+        use_freebits = (args.model == 'freebits')
+        use_ae = (args.model == 'ae')
+        
         train_metrics = train_epoch(
             model, train_loader, optimizer, kl_warmup, capacity_scheduler,
             mean, std, args.lambda_l1, args.lambda_ssim, device,
-            denoise_sigma=args.noise_sigma if args.denoise else 0.0
+            denoise_sigma=args.noise_sigma if args.denoise else 0.0,
+            use_freebits=use_freebits,
+            free_bits=args.free_bits,
+            use_ae=use_ae
         )
         
         # Validate
         val_metrics = validate_epoch(
             model, val_loader, capacity_scheduler,
-            mean, std, args.lambda_l1, args.lambda_ssim, 
-            kl_warmup.get_beta(), device
+            mean, std, args.lambda_l1, args.lambda_ssim,
+            kl_warmup.get_beta(), device,
+            use_freebits=use_freebits,
+            free_bits=args.free_bits,
+            use_ae=use_ae
         )
         
         # Track history
@@ -439,18 +531,41 @@ def main():
         loss_history['capacity'].append(capacity_scheduler.get_capacity())
         
         # Print progress
-        print(f"Epoch {epoch+1:3d}/{args.epochs} | "
-              f"Train Loss: {train_metrics['loss']:.4f} | "
-              f"Val Loss: {val_metrics['loss']:.4f} | "
-              f"KL: {train_metrics['kl']:.2f}/{val_metrics['kl']:.2f} | "
-              f"β: {train_metrics['beta']:.2f} | "
-              f"C: {capacity_scheduler.get_capacity():.1f}", end="")
+        # Print epoch progress (different format for AE vs VAE)
+        if use_ae:
+            # AE: No KL or β
+            print(f"Epoch {epoch+1:3d}/{args.epochs} | "
+                  f"Train Loss: {train_metrics['loss']:.4f} | "
+                  f"Val Loss: {val_metrics['loss']:.4f}", end="")
+        else:
+            # VAE: Show KL and β (hide C when not used)
+            capacity_current = capacity_scheduler.get_capacity()
+            if capacity_current > 0:
+                print(f"Epoch {epoch+1:3d}/{args.epochs} | "
+                      f"Train Loss: {train_metrics['loss']:.4f} | "
+                      f"Val Loss: {val_metrics['loss']:.4f} | "
+                      f"KL: {train_metrics['kl']:.2f}/{val_metrics['kl']:.2f} | "
+                      f"β: {train_metrics['beta']:.2f} | "
+                      f"C: {capacity_current:.1f}", end="")
+            else:
+                print(f"Epoch {epoch+1:3d}/{args.epochs} | "
+                      f"Train Loss: {train_metrics['loss']:.4f} | "
+                      f"Val Loss: {val_metrics['loss']:.4f} | "
+                      f"KL: {train_metrics['kl']:.2f}/{val_metrics['kl']:.2f} | "
+                      f"β: {train_metrics['beta']:.2f}", end="")
         
         # Learning rate scheduler
         scheduler.step()
         
         # Save best model (based on validation loss)
-        if val_metrics['loss'] < best_loss:
+        # For VAE: Only consider epochs AFTER warm-up completes (when β reaches target)
+        # For AE: Track from epoch 1 (no warm-up needed)
+        if use_ae:
+            track_best = True
+        else:
+            track_best = (epoch >= args.kl_warmup)
+        
+        if val_metrics['loss'] < best_loss and track_best:
             best_loss = val_metrics['loss']
             torch.save({
                 'epoch': epoch,
@@ -473,7 +588,10 @@ def main():
                 },
                 'loss_history': loss_history,
             }, args.output)
-            print(" ← Best!")
+            if use_ae or epoch >= args.kl_warmup:
+                print(" ← Best!")
+            else:
+                print(" (warm-up, not tracked)")
         else:
             print()
         
@@ -516,9 +634,10 @@ def main():
             plot_loss_curves(loss_history, f'{args.recon_dir}/loss_curves.png')
             print(f"  ✓ Loss curves: {args.recon_dir}/loss_curves.png")
         
-        # Step schedulers
-        kl_warmup.step()
-        capacity_scheduler.step()
+        # Step schedulers EVERY epoch (not just when saving checkpoints!)
+        if not use_ae:
+            kl_warmup.step()
+            capacity_scheduler.step()
     
     print()
     print("="*70)
