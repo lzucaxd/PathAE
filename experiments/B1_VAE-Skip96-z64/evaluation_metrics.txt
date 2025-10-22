@@ -1,67 +1,0 @@
-======================================================================
-EVALUATION METRICS FOR TUMOR DETECTION
-======================================================================
-
-======================================================================
-PATCH-LEVEL METRICS
-======================================================================
-
-  Total tiles: 166,030
-  Tumor tiles: 2,317
-  Normal tiles: 163,713
-
-  AUC-ROC: 0.7841
-  PR-AUC (Precision-Recall): 0.0444
-
-  Optimal threshold: 0.0400
-  Precision: 0.0396
-  Recall: 0.6793
-  F1-Score: 0.0748
-  Dice Score: 0.0748
-  IoU (Jaccard): 0.0388
-
-  Confusion Matrix:
-    TP:  1,574  FP: 38,214
-    FN:    743  TN: 125,499
-
-======================================================================
-PIXEL-LEVEL METRICS
-======================================================================
-  Computing pixel-level AUC:   0%|          | 0/8 [00:00<?, ?it/s]  Computing pixel-level AUC:  12%|█▎        | 1/8 [00:00<00:02,  2.42it/s]  Computing pixel-level AUC:  25%|██▌       | 2/8 [00:00<00:01,  3.05it/s]  Computing pixel-level AUC:  38%|███▊      | 3/8 [00:00<00:01,  3.65it/s]  Computing pixel-level AUC:  50%|█████     | 4/8 [00:01<00:01,  3.26it/s]  Computing pixel-level AUC:  62%|██████▎   | 5/8 [00:01<00:00,  3.00it/s]  Computing pixel-level AUC:  75%|███████▌  | 6/8 [00:01<00:00,  3.32it/s]  Computing pixel-level AUC:  88%|████████▊ | 7/8 [00:02<00:00,  2.24it/s]  Computing pixel-level AUC: 100%|██████████| 8/8 [00:02<00:00,  2.57it/s]  Computing pixel-level AUC: 100%|██████████| 8/8 [00:02<00:00,  2.78it/s]
-
-  Pixel-level AUC: 0.9735
-
-======================================================================
-FROC (Free-Response ROC)
-======================================================================
-  Computing FROC:   0%|          | 0/100 [00:00<?, ?it/s]  Computing FROC:   3%|▎         | 3/100 [00:00<00:03, 27.17it/s]  Computing FROC:   6%|▌         | 6/100 [00:00<00:03, 26.58it/s]  Computing FROC:   9%|▉         | 9/100 [00:00<00:03, 26.11it/s]  Computing FROC:  12%|█▏        | 12/100 [00:00<00:03, 25.74it/s]  Computing FROC:  15%|█▌        | 15/100 [00:00<00:03, 25.74it/s]  Computing FROC:  18%|█▊        | 18/100 [00:00<00:03, 25.92it/s]  Computing FROC:  21%|██        | 21/100 [00:00<00:02, 26.37it/s]  Computing FROC:  24%|██▍       | 24/100 [00:00<00:02, 26.36it/s]  Computing FROC:  27%|██▋       | 27/100 [00:01<00:02, 25.92it/s]  Computing FROC:  30%|███       | 30/100 [00:01<00:02, 26.00it/s]  Computing FROC:  33%|███▎      | 33/100 [00:01<00:02, 25.89it/s]  Computing FROC:  36%|███▌      | 36/100 [00:01<00:02, 25.79it/s]  Computing FROC:  39%|███▉      | 39/100 [00:01<00:02, 25.69it/s]  Computing FROC:  42%|████▏     | 42/100 [00:01<00:02, 25.83it/s]  Computing FROC:  45%|████▌     | 45/100 [00:01<00:02, 25.92it/s]  Computing FROC:  48%|████▊     | 48/100 [00:01<00:02, 25.76it/s]  Computing FROC:  51%|█████     | 51/100 [00:01<00:01, 25.48it/s]  Computing FROC:  54%|█████▍    | 54/100 [00:02<00:01, 25.44it/s]  Computing FROC:  57%|█████▋    | 57/100 [00:02<00:01, 25.50it/s]  Computing FROC:  60%|██████    | 60/100 [00:02<00:01, 25.52it/s]  Computing FROC:  63%|██████▎   | 63/100 [00:02<00:01, 25.32it/s]  Computing FROC:  66%|██████▌   | 66/100 [00:02<00:01, 25.49it/s]  Computing FROC:  69%|██████▉   | 69/100 [00:02<00:01, 25.29it/s]  Computing FROC:  72%|███████▏  | 72/100 [00:02<00:01, 25.70it/s]  Computing FROC:  75%|███████▌  | 75/100 [00:02<00:00, 25.75it/s]  Computing FROC:  78%|███████▊  | 78/100 [00:03<00:00, 25.79it/s]  Computing FROC:  81%|████████  | 81/100 [00:03<00:00, 25.82it/s]  Computing FROC:  84%|████████▍ | 84/100 [00:03<00:00, 21.60it/s]  Computing FROC:  87%|████████▋ | 87/100 [00:03<00:00, 22.72it/s]  Computing FROC:  90%|█████████ | 90/100 [00:03<00:00, 23.74it/s]  Computing FROC:  93%|█████████▎| 93/100 [00:03<00:00, 24.72it/s]  Computing FROC:  96%|█████████▌| 96/100 [00:03<00:00, 25.52it/s]  Computing FROC:  99%|█████████▉| 99/100 [00:03<00:00, 25.94it/s]  Computing FROC: 100%|██████████| 100/100 [00:03<00:00, 25.46it/s]
-
-  Partial FROC (mean sensitivity at fixed FP rates):
-    0.25 FP/slide: sensitivity = 0.0000
-    0.50 FP/slide: sensitivity = 0.0000
-    1.00 FP/slide: sensitivity = 0.0000
-    2.00 FP/slide: sensitivity = 0.0000
-    4.00 FP/slide: sensitivity = 0.0000
-    8.00 FP/slide: sensitivity = 0.0000
-
-  Average Partial FROC: 0.0000
-
-  ✓ FROC curve saved to: froc_curve.png
-
-======================================================================
-SUMMARY
-======================================================================
-  Patch-level AUC-ROC      : 0.7841
-  Patch-level PR-AUC       : 0.0444
-  Pixel-level AUC          : 0.9735
-  Partial FROC             : 0.0000
-  Optimal Threshold        : 0.0400
-  Precision                : 0.0396
-  Recall                   : 0.6793
-  F1-Score                 : 0.0748
-  Dice Score               : 0.0748
-  IoU (Jaccard)            : 0.0388
-
-✓ Evaluation complete!
-  Summary: evaluation_summary.csv
-  FROC curve: froc_curve.png
