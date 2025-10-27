@@ -375,28 +375,6 @@ Training logs, metrics, and checkpoints are saved for every experiment.
 4. **Supervised Contrastive Learning**: Khosla et al., "Supervised Contrastive Learning", NeurIPS 2020
 5. **Test-Time Augmentation**: Wang et al., "Aleatoric uncertainty estimation with test-time augmentation for medical image segmentation", Neurocomputing 2019
 
----
-
-## 📄 License
-
-MIT License - see [LICENSE](LICENSE) for details
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
----
-
-## 📧 Contact
-
-**Luca Zamfira**  
-Email: [your.email@domain.com](mailto:your.email@domain.com)  
-LinkedIn: [linkedin.com/in/yourprofile](https://linkedin.com/in/yourprofile)  
-GitHub: [@yourusername](https://github.com/yourusername)
-
----
 
 ## 🙏 Acknowledgments
 
