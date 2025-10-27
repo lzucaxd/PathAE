@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **Author**: Luca Zamfira  
-**Institution**: Northeastern Univeristy
+**Institution**: Northeastern University
 **Date**: October 2025
 
 ---
